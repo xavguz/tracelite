@@ -1,0 +1,14 @@
+# Artefactos de compilacion
+build/
+bin/
+lib/
+*.o
+*.d
+*.a
+
+# Artefactos de ejecucion
+*.sock
+*.log
+
+# Herramientas locales
+compile_commands.json
