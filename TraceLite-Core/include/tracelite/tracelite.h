@@ -67,6 +67,9 @@ int tl_span_start(tl_span_t *span,
  * El span queda finalizado aunque el envio falle. Devuelve 0 si se finalizo y
  * se envio correctamente, o -1 en caso contrario (errno establecido). Un
  * fallo de telemetria no debe tratarse como fallo de negocio.
+ *
+ * Un span solo puede finalizarse una vez. Una segunda llamada sobre el mismo
+ * span falla con errno = EALREADY sin modificar sus datos ni reenviarlo.
  */
 int tl_span_finish(tl_span_t *span,
                    tl_span_status_t status,

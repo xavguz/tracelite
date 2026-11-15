@@ -1,0 +1,68 @@
+make -C TraceLite-Core
+make[1]: Entering directory '/home/xav/Documents/tracelite/TraceLite-Core'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/xav/Documents/tracelite/TraceLite-Core'
+make -C Services
+make[1]: Entering directory '/home/xav/Documents/tracelite/Services'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/xav/Documents/tracelite/Services'
+./Services/bin/process_manager
+[process-manager] runtime: /tmp/tracelite-60M4O6
+[process-manager] inventario: /home/xav/Documents/tracelite/Services/bin/inventory_service
+[process-manager] pedidos: /home/xav/Documents/tracelite/Services/bin/order_service
+[process-manager] collector: /home/xav/Documents/tracelite/Services/bin/../../TraceLite-Core/bin/collector
+[collector] escuchando en /tmp/tracelite-60M4O6/collector.sock (pid=6298)
+[process-manager] collector listo (pid=6298)
+[process-manager] inventory_service listo (pid=6299)
+[process-manager] order_service iniciado (pid=6300)
+[inventory] escuchando en /tmp/tracelite-60M4O6/inventory.sock
+[order] conectado a /tmp/tracelite-60M4O6/inventory.sock
+[inventory] conexion aceptada; procesando 3 pedidos
+[inventory] req=1 ORD-001 PRODUCT-001 qty=5 -> OK (available=15): reserved 5 unit(s) of PRODUCT-001
+[order] req=1 ORD-001 PRODUCT-001 qty=5 -> OK (available=15): reserved 5 unit(s) of PRODUCT-001
+[inventory] demora simulada de 150 ms para ORD-002
+[collector] span aceptado trace_id=0xda50e243e1ef74b8 span_id=0x25cd7c9af0af6bd4 service=inventory-service
+[collector] span aceptado trace_id=0xda50e243e1ef74b8 span_id=0xd199fcea0257b363 service=order-service
+[inventory] req=2 ORD-002 PRODUCT-002 qty=3 -> OK (available=7): reserved 3 unit(s) of PRODUCT-002
+[collector] span aceptado trace_id=0x3a6274ef7584e374 span_id=0x77e331eed78c66c1 service=inventory-service
+[order] req=2 ORD-002 PRODUCT-002 qty=3 -> OK (available=7): reserved 3 unit(s) of PRODUCT-002
+[collector] span aceptado trace_id=0x3a6274ef7584e374 span_id=0xeebb48426b36ca63 service=order-service
+[inventory] req=3 ORD-003 PRODUCT-003 qty=1 -> SIMULATED_ERROR (available=5): simulated inventory failure for ORD-003
+[inventory] tres pedidos procesados correctamente
+[collector] span aceptado trace_id=0x8fd2d7f0ab27dced span_id=0xa939084761b6443d service=inventory-service
+[order] req=3 ORD-003 PRODUCT-003 qty=1 -> SIMULATED_ERROR (available=5): simulated inventory failure for ORD-003
+[collector] span aceptado trace_id=0x8fd2d7f0ab27dced span_id=0xf4796cace0460314 service=order-service
+[order] tres pedidos procesados; error controlado de ORD-003 verificado
+[process-manager] order_service termino con codigo 0
+[process-manager] inventory_service termino con codigo 0
+[collector] SHUTDOWN recibido; cerrando
+[collector] spans aceptados=6 rechazados=0
+=== TraceLite Collector: 3 traza(s), 6 span(s) ===
+
+Traza 1/3: trace_id=0xda50e243e1ef74b8 spans=2
+[raiz] depth=0 trace_id=0xda50e243e1ef74b8 span_id=0xd199fcea0257b363 parent_span_id=none
+  service=order-service operation=process-order status=SUCCESS
+  start_ns=2478411536331 end_ns=2478412104406 duration_ms=0.568
+  [hijo] depth=1 trace_id=0xda50e243e1ef74b8 span_id=0x25cd7c9af0af6bd4 parent_span_id=0xd199fcea0257b363
+    service=inventory-service operation=reserve-stock status=SUCCESS
+    start_ns=2478411779814 end_ns=2478411791944 duration_ms=0.012
+
+Traza 2/3: trace_id=0x3a6274ef7584e374 spans=2
+[raiz] depth=0 trace_id=0x3a6274ef7584e374 span_id=0xeebb48426b36ca63 parent_span_id=none
+  service=order-service operation=process-order status=SUCCESS
+  start_ns=2478412121438 end_ns=2478565083457 duration_ms=152.962
+  [hijo] depth=1 trace_id=0x3a6274ef7584e374 span_id=0x77e331eed78c66c1 parent_span_id=0xeebb48426b36ca63
+    service=inventory-service operation=reserve-stock status=SUCCESS
+    start_ns=2478412126908 end_ns=2478564905138 duration_ms=152.778
+
+Traza 3/3: trace_id=0x8fd2d7f0ab27dced spans=2
+[raiz] depth=0 trace_id=0x8fd2d7f0ab27dced span_id=0xf4796cace0460314 parent_span_id=none
+  service=order-service operation=process-order status=ERROR
+  start_ns=2478565366617 end_ns=2478565642379 duration_ms=0.275
+  error="simulated inventory failure for ORD-003"
+  [hijo] depth=1 trace_id=0x8fd2d7f0ab27dced span_id=0xa939084761b6443d parent_span_id=0xf4796cace0460314
+    service=inventory-service operation=reserve-stock status=ERROR
+    start_ns=2478565537670 end_ns=2478565548721 duration_ms=0.011
+    error="simulated inventory failure for ORD-003"
+[process-manager] collector termino con codigo 0
+[process-manager] ejecucion completada correctamente

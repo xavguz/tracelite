@@ -1,7 +1,9 @@
 # Artefactos de compilacion
-build/
-bin/
-lib/
+/Services/build/
+/Services/bin/
+/TraceLite-Core/build/
+/TraceLite-Core/bin/
+/TraceLite-Core/lib/
 *.o
 *.d
 *.a

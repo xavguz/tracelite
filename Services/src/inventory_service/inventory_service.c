@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef struct inventory_item {
@@ -23,6 +24,26 @@ static tl_span_status_t span_status_from_stock(int32_t status)
 {
     return status == TL_STOCK_STATUS_OK ? TL_SPAN_STATUS_OK
                                         : TL_SPAN_STATUS_ERROR;
+}
+
+/*
+ * Espera de duracion fija usada por ORD-002. nanosleep() puede interrumpirse
+ * por una señal; en ese caso se reanuda con el tiempo restante.
+ */
+static int simulate_processing_delay(unsigned int delay_ms)
+{
+    struct timespec remaining;
+
+    remaining.tv_sec = (time_t)(delay_ms / 1000u);
+    remaining.tv_nsec = (long)(delay_ms % 1000u) * 1000000L;
+
+    while (nanosleep(&remaining, &remaining) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 static inventory_item_t *find_item(inventory_item_t *items, size_t item_count,
@@ -222,6 +243,25 @@ static int handle_connection(int client_fd, inventory_item_t *items,
             } else {
                 fprintf(stderr, "[inventory] tl_span_start: %s\n",
                         strerror(errno));
+            }
+        }
+
+        /*
+         * ORD-002 representa una operacion lenta. La espera ocurre despues de
+         * iniciar el span para que su duracion incluya la demora simulada.
+         */
+        if (strcmp(request.order_id, "ORD-002") == 0) {
+            printf("[inventory] demora simulada de %u ms para %s\n",
+                   TL_ORD002_DELAY_MS, request.order_id);
+            fflush(stdout);
+
+            if (simulate_processing_delay(TL_ORD002_DELAY_MS) < 0) {
+                perror("[inventory] simulate_processing_delay");
+                if (span_started) {
+                    (void)tl_span_finish(&span, TL_SPAN_STATUS_ERROR,
+                                         "simulated delay failed");
+                }
+                return -1;
             }
         }
 

@@ -22,6 +22,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "tracelite/collector_protocol.h"
@@ -50,6 +51,20 @@
                     __FILE__, __LINE__, #call, check_result, saved_errno,    \
                     strerror(saved_errno), (expected));                      \
             return -1;                                                       \
+        }                                                                    \
+    } while (0)
+
+/*
+ * Variante de CHECK para funciones que reservan memoria: en lugar de retornar
+ * directamente, salta al bloque de limpieza para no dejar fugas en las rutas
+ * de fallo.
+ */
+#define CHECK_GOTO(condition, label)                                         \
+    do {                                                                     \
+        if (!(condition)) {                                                  \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,          \
+                    #condition);                                             \
+            goto label;                                                      \
         }                                                                    \
     } while (0)
 
@@ -257,6 +272,9 @@ static int test_init_and_lifecycle(const test_receiver_t *receiver)
     CHECK(check_span_message(receiver->fd, &root, TL_SPAN_STATUS_OK,
                              NULL) == 0);
 
+    /* Un span finalizado no puede volver a finalizarse ni reenviarse. */
+    CHECK_ERRNO(tl_span_finish(&root, TL_SPAN_STATUS_OK, NULL), EALREADY);
+
     /* Hijo con error: el mensaje se transporta intacto. */
     CHECK(tl_span_finish(&child, TL_SPAN_STATUS_ERROR,
                          "simulated inventory failure") == 0);
@@ -279,6 +297,36 @@ static int test_init_and_lifecycle(const test_receiver_t *receiver)
     CHECK(control.version == TL_COLLECTOR_VERSION);
     CHECK(control.type == TL_COLLECTOR_MESSAGE_SHUTDOWN);
 
+    return 0;
+}
+
+static int test_duration_measurement(const test_receiver_t *receiver)
+{
+    const int64_t requested_ns = INT64_C(10000000); /* 10 ms */
+    const int64_t minimum_ns = INT64_C(8000000);    /* margen de 2 ms */
+    const int64_t maximum_ns = INT64_C(5000000000); /* 5 s */
+    struct timespec remaining;
+    tl_span_t span;
+    tl_trace_context_t context;
+
+    tl_shutdown();
+    CHECK(tl_init("duration-service") == 0);
+
+    CHECK(tl_span_start(&span, "measure-duration", NULL, &context) == 0);
+
+    remaining.tv_sec = 0;
+    remaining.tv_nsec = (long)requested_ns;
+    while (nanosleep(&remaining, &remaining) < 0) {
+        CHECK(errno == EINTR);
+    }
+
+    CHECK(tl_span_finish(&span, TL_SPAN_STATUS_OK, NULL) == 0);
+    CHECK(span.duration_ns >= minimum_ns);
+    CHECK(span.duration_ns < maximum_ns);
+    CHECK(check_span_message(receiver->fd, &span, TL_SPAN_STATUS_OK,
+                             NULL) == 0);
+
+    tl_shutdown();
     return 0;
 }
 
@@ -340,13 +388,14 @@ static int test_id_uniqueness(void)
         goto cleanup;
     }
 
-    CHECK(tl_init("id-test") == 0);
+    CHECK_GOTO(tl_init("id-test") == 0, cleanup);
 
     for (index = 0; index < sample_size; index++) {
-        CHECK(tl_span_start(&span, "generate", NULL, &context) == 0);
-        CHECK(span.trace_id != TL_INVALID_TRACE_ID);
-        CHECK(span.span_id != TL_INVALID_SPAN_ID);
-        CHECK(span.parent_span_id == TL_INVALID_SPAN_ID);
+        CHECK_GOTO(tl_span_start(&span, "generate", NULL, &context) == 0,
+                   cleanup);
+        CHECK_GOTO(span.trace_id != TL_INVALID_TRACE_ID, cleanup);
+        CHECK_GOTO(span.span_id != TL_INVALID_SPAN_ID, cleanup);
+        CHECK_GOTO(span.parent_span_id == TL_INVALID_SPAN_ID, cleanup);
         trace_ids[index] = span.trace_id;
         span_ids[index] = span.span_id;
     }
@@ -357,8 +406,8 @@ static int test_id_uniqueness(void)
      */
     for (index = 0; index < sample_size; index++) {
         for (other = index + 1u; other < sample_size; other++) {
-            CHECK(trace_ids[index] != trace_ids[other]);
-            CHECK(span_ids[index] != span_ids[other]);
+            CHECK_GOTO(trace_ids[index] != trace_ids[other], cleanup);
+            CHECK_GOTO(span_ids[index] != span_ids[other], cleanup);
         }
     }
 
@@ -420,6 +469,7 @@ int main(void)
     }
 
     if (test_init_and_lifecycle(&receiver) < 0 ||
+        test_duration_measurement(&receiver) < 0 ||
         test_truncation(&receiver) < 0 ||
         test_id_uniqueness() < 0 ||
         test_collector_unavailable(&receiver) < 0) {

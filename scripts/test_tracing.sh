@@ -110,9 +110,43 @@ expect_count "service=inventory-service operation=reserve-stock" 3
 expect_count "status=SUCCESS" 4
 expect_count "status=ERROR" 2
 expect_count 'error="simulated inventory failure for ORD-003"' 2
+expect_count "[inventory] demora simulada" 1
 
 reject_line "[huerfano]"
 reject_line "status=UNSET"
+
+# ORD-002 debe provocar una demora real y la duracion de al menos un span debe
+# reflejarla. Se toma el valor declarado por Inventory y se compara con la
+# mayor duracion impresa por el Collector.
+delay_ms=$(sed -n \
+    's/.*demora simulada de \([0-9][0-9]*\) ms para ORD-002.*/\1/p' \
+    "$LOG" | head -n 1)
+if [ -z "$delay_ms" ]; then
+    fail "no se encontro la demora simulada de ORD-002"
+fi
+if [ "$delay_ms" -lt 100 ]; then
+    fail "la demora de ORD-002 es demasiado pequena: ${delay_ms} ms"
+fi
+
+max_duration_ms=$(awk '
+/duration_ms=/ {
+    for (i = 1; i <= NF; i++) {
+        if ($i ~ /^duration_ms=/) {
+            split($i, parts, "=")
+            value = parts[2] + 0
+            if (value > max) {
+                max = value
+            }
+        }
+    }
+}
+END { printf "%.3f", max }
+' "$LOG")
+
+if ! awk -v max="$max_duration_ms" -v delay="$delay_ms" \
+    'BEGIN { exit !(max >= delay - 10) }'; then
+    fail "la duracion maxima (${max_duration_ms} ms) no refleja la demora de ORD-002 (${delay_ms} ms)"
+fi
 
 # El padre del hijo debe coincidir con el span raiz de la misma traza. Tambien
 # se comprueba que las tres raices pertenecen a trazas distintas.
@@ -174,4 +208,6 @@ if [ -e "$RUNTIME_DIR" ]; then
 fi
 
 printf '%s\n' "test-tracing: jerarquia OK (3 raices, 3 hijos)"
+printf '%s\n' \
+    "test-tracing: demora ORD-002 OK (${delay_ms} ms; duracion max ${max_duration_ms} ms)"
 printf '%s\n' "test-tracing: OK"

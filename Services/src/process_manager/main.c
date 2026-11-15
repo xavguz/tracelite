@@ -12,6 +12,36 @@
 
 #include "tracelite/tracelite.h"
 
+static volatile sig_atomic_t g_stop_requested = 0;
+
+static void handle_stop_signal(int signal_number)
+{
+    (void)signal_number;
+    g_stop_requested = 1;
+}
+
+static int install_signal_handlers(void)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = handle_stop_signal;
+    sigemptyset(&action.sa_mask);
+    /* Sin SA_RESTART: read(), waitpid() y nanosleep() deben poder despertar. */
+    action.sa_flags = 0;
+
+    if (sigaction(SIGINT, &action, NULL) < 0) {
+        return -1;
+    }
+    if (sigaction(SIGTERM, &action, NULL) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static void terminate_child(pid_t pid);
+
 static int get_executable_dir(char *buffer, size_t buffer_size)
 {
     char executable_path[PATH_MAX];
@@ -77,7 +107,12 @@ static int wait_for_ready(int read_fd)
 
     do {
         result = read(read_fd, &value, 1);
-    } while (result < 0 && errno == EINTR);
+    } while (result < 0 && errno == EINTR && !g_stop_requested);
+
+    if (g_stop_requested) {
+        errno = EINTR;
+        return -1;
+    }
 
     if (result < 0) {
         return -1;
@@ -99,11 +134,23 @@ static int wait_child(pid_t pid, const char *name)
     int status;
     pid_t result;
 
-    do {
+    for (;;) {
         result = waitpid(pid, &status, 0);
-    } while (result < 0 && errno == EINTR);
+        if (result == pid) {
+            break;
+        }
 
-    if (result < 0) {
+        if (result < 0 && errno == EINTR) {
+            /*
+             * Una señal de interrupcion solicita el cierre. Se termina el hijo
+             * y se sigue esperando para recogerlo y no dejar zombis.
+             */
+            if (g_stop_requested) {
+                terminate_child(pid);
+            }
+            continue;
+        }
+
         fprintf(stderr, "[process-manager] waitpid(%s): %s\n", name,
                 strerror(errno));
         return -1;
@@ -153,6 +200,11 @@ static int wait_for_socket(const char *path, pid_t pid)
     delay.tv_nsec = 20000000L; /* 20 ms */
 
     for (attempt = 0; attempt < 250u; attempt++) {
+        if (g_stop_requested) {
+            errno = EINTR;
+            return -1;
+        }
+
         if (lstat(path, &info) == 0) {
             if (S_ISSOCK(info.st_mode)) {
                 return 0;
@@ -198,6 +250,11 @@ int main(void)
     int result = EXIT_FAILURE;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    if (install_signal_handlers() < 0) {
+        perror("[process-manager] sigaction");
+        goto cleanup;
+    }
 
     if (get_executable_dir(executable_dir, sizeof(executable_dir)) < 0) {
         perror("[process-manager] get_executable_dir");
@@ -256,6 +313,12 @@ int main(void)
     printf("[process-manager] collector: %s\n", collector_path);
     fflush(stdout);
 
+    if (g_stop_requested) {
+        errno = EINTR;
+        perror("[process-manager] interrumpido antes de iniciar el collector");
+        goto cleanup;
+    }
+
     collector_pid = fork();
     if (collector_pid < 0) {
         perror("[process-manager] fork collector");
@@ -288,6 +351,12 @@ int main(void)
      */
     if (setenv("TRACELITE_COLLECTOR_SOCKET", collector_socket_path, 1) < 0) {
         perror("[process-manager] setenv TRACELITE_COLLECTOR_SOCKET");
+        goto cleanup;
+    }
+
+    if (g_stop_requested) {
+        errno = EINTR;
+        perror("[process-manager] interrumpido antes de iniciar inventory");
         goto cleanup;
     }
 
@@ -337,6 +406,15 @@ int main(void)
     printf("[process-manager] inventory_service listo (pid=%ld)\n",
            (long)inventory_pid);
     fflush(stdout);
+
+    if (g_stop_requested) {
+        errno = EINTR;
+        perror("[process-manager] interrumpido antes de iniciar order");
+        terminate_child(inventory_pid);
+        inventory_code = wait_child(inventory_pid, "inventory_service");
+        inventory_pid = -1;
+        goto cleanup;
+    }
 
     order_pid = fork();
     if (order_pid < 0) {
