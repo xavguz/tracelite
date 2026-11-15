@@ -1,6 +1,0 @@
-Comprobacion de residuos tras make run
---- procesos ---
---- directorios temporales ---
---- sockets ---
---- resultado ---
-LIMPIEZA OK: sin procesos, sockets ni directorios temporales residuales

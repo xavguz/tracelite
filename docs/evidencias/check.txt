@@ -1,8 +1,0 @@
-make -C TraceLite-Core check
-make[1]: Entering directory '/home/xav/Documents/tracelite/TraceLite-Core'
-TraceLite-Core: encabezados OK
-make[1]: Leaving directory '/home/xav/Documents/tracelite/TraceLite-Core'
-make -C Services check
-make[1]: Entering directory '/home/xav/Documents/tracelite/Services'
-Services: encabezados OK
-make[1]: Leaving directory '/home/xav/Documents/tracelite/Services'
