@@ -81,15 +81,6 @@ Criterio de éxito: código de salida `0` y ninguna advertencia de compilación.
 make run
 ```
 
-Comprueba manualmente:
-
-- [ ] Se muestran **3 trazas** y **6 spans**.
-- [ ] Cada traza tiene un `[raiz]` de `order-service` y un `[hijo]` de `inventory-service`.
-- [ ] El hijo conserva el `trace_id` y su `parent_span_id` es el `span_id` de la raíz.
-- [ ] ORD-002 tarda claramente más (~150 ms).
-- [ ] ORD-003 aparece como `ERROR` con el mensaje de fallo simulado.
-- [ ] La última línea es `ejecucion completada correctamente`.
-
 ### 3. Pruebas individuales
 
 ```sh
@@ -167,15 +158,6 @@ La comunicación usa sockets Unix con nombre: `SOCK_STREAM` para el negocio y
 | `ORD-001` | `PRODUCT-001` | 5 | `OK`, stock 20 → 15 |
 | `ORD-002` | `PRODUCT-002` | 3 | `OK`, stock 10 → 7, demora de 150 ms |
 | `ORD-003` | `PRODUCT-003` | 1 | `SIMULATED_ERROR`, stock sin cambios |
-
-## Documentación
-
-- [Arquitectura y justificación del IPC](docs/architecture.md)
-- [Protocolos y formato de mensajes](docs/protocol.md)
-- [Compilación y resultados detallados](docs/build.md)
-- [Informe de avance](docs/informe-avance.md)
-- [Checklist de funcionalidades](docs/checklist.md)
-- [Evidencias reales de ejecución](docs/evidencias/)
 
 ## Limitaciones
 
