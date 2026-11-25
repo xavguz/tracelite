@@ -1,66 +1,132 @@
 # TraceLite
 
-TraceLite es un sistema ligero de trazabilidad distribuida para GNU/Linux,
-escrito en C11 y sin dependencias externas. Un pedido recorre dos servicios de
-negocio, genera spans correlacionados por el mismo `trace_id` y los envía a un
-Collector local, que reconstruye la jerarquía y la muestra en terminal.
+TraceLite es un proyecto universitario de Sistemas Operativos en C11 para GNU/Linux. Combina una aplicación de inventario con un sistema ligero de trazabilidad inspirado en OpenTelemetry.
 
-## Inicio rápido
+Las aplicaciones se ejecutan de forma independiente:
 
-Requisitos: GNU/Linux, compilador C11 (`cc`/`gcc`/`clang`), GNU Make, `ar` y un
-shell POSIX.
+~~~
+./tracelite     # Collector, alertas e historial
+./service        # Process Manager, Order Service e Inventory Service
+~~~
 
-```sh
-make          # compila biblioteca, Collector y servicios
-make test     # ejecuta las tres suites de prueba
-make run      # ejecuta el escenario completo de tres pedidos
-```
+## Qué hace
 
-Todos los comandos se ejecutan desde la raíz del repositorio. `make` usa
-siempre `-std=c11 -Wall -Wextra -Wpedantic` y no oculta advertencias.
+- Lista productos, consulta por ID y procesa pedidos sobre `data/inventory.json`.
+- Genera un span raíz en `order-service` y uno hijo en `inventory-service` por solicitud.
+- Propaga Trace ID, Span ID y Parent Span ID entre procesos.
+- Mide duración real con `CLOCK_MONOTONIC`.
+- Simula demora aleatoria de 10 a 500 ms en pedidos.
+- Detecta errores y duraciones mayores a 400 ms.
+- Guarda spans en `traces.jsonl` y permite consultarlos después de reiniciar.
 
-## Qué deberías ver
+## Requisitos e instalación
 
-`make run` termina con algo similar a esto (identificadores y tiempos varían):
+Se requiere GNU/Linux, un compilador C11 (GCC, Clang o `cc`), GNU Make, `ar` y un shell POSIX. cJSON se incluye en `third_party/cjson`; su licencia está en `third_party/cjson/LICENSE`.
 
-```text
-[collector] spans aceptados=6 rechazados=0
-=== TraceLite Collector: 3 traza(s), 6 span(s) ===
+Desde la raíz:
 
-Traza 1/3: trace_id=0xda50e243e1ef74b8 spans=2
-[raiz] depth=0 trace_id=0xda50e243e1ef74b8 span_id=0xd199fcea0257b363 parent_span_id=none
-  service=order-service operation=process-order status=SUCCESS
-  start_ns=2478411536331 end_ns=2478412104406 duration_ms=0.568
-  [hijo] depth=1 trace_id=0xda50e243e1ef74b8 span_id=0x25cd7c9af0af6bd4 parent_span_id=0xd199fcea0257b363
-    service=inventory-service operation=reserve-stock status=SUCCESS
-    start_ns=2478411779814 end_ns=2478411791944 duration_ms=0.012
-
-Traza 2/3 ... status=SUCCESS duration_ms=152.962 (hijo: 152.778)  # demora ORD-002
-Traza 3/3 ... status=ERROR   duration_ms=0.275  (hijo: 0.011)
-  error="simulated inventory failure for ORD-003"
-
-[process-manager] ejecucion completada correctamente
-```
-
-Interpretación:
-
-- **3 trazas / 6 spans**: un pedido = una traza con un span raíz y un hijo.
-- **`trace_id`**: se repite entre raíz e hijo; identifica la solicitud.
-- **`parent_span_id` del hijo**: coincide con el `span_id` de su raíz.
-- **`duration_ms`**: tiempo real medido con `CLOCK_MONOTONIC`.
-- **ORD-003** es un error de negocio intencional; el proceso sale con código 0.
-
-## Guía de prueba
-
-### 1. Prueba automatizada completa
-
-```sh
-make clean
+~~~
 make
 make check
-make test
-```
+~~~
 
+Se crean `./tracelite`, `./service`, `libtracelite.a` y los ejecutables de los servicios.
+
+## Tutorial: ejecutar en dos terminales
+
+### Terminal 1: TraceLite
+
+~~~
+./tracelite
+~~~
+
+Selecciona `1. Escuchar servicios`. TraceLite crea el socket del Collector en `/tmp/tracelite/collector.sock` y espera spans.
+
+~~~
+============= TRACELITE =============
+
+1. Escuchar servicios
+2. Historial de trazas
+0. Salir
+~~~
+
+Presiona `Ctrl+C` para detener sólo la escucha: se muestran las trazas de la sesión y el resumen, y se vuelve al menú.
+
+### Terminal 2: inventario
+
+~~~
+./service
+~~~
+
+El Process Manager crea Inventory y Order con `fork()` y `exec()`. El menú de negocio es:
+
+~~~
+========== INVENTORY SYSTEM ==========
+
+1. Listar productos
+2. Consultar producto
+3. Realizar pedido
+0. Salir
+~~~
+
+Prueba esta secuencia:
+
+1. Elige `1` para listar productos.
+2. Elige `2` e ingresa `PRODUCT-001`.
+3. Elige `3`, `PRODUCT-001` y cantidad `2`. El stock se descuenta y se persiste.
+4. Elige `3`, `PRODUCT-003` y cantidad `999`. Se obtiene stock insuficiente y una alerta de error.
+5. Elige `0`. El padre recoge a sus hijos con `waitpid()` y limpia el socket de negocio.
+
+La primera terminal muestra spans correlacionados, alertas y el resumen de sesión.
+
+## Historial
+
+Los spans válidos se agregan a `traces.jsonl`; nunca se sobrescriben ejecuciones anteriores. En TraceLite selecciona `2. Historial de trazas`:
+
+~~~
+1. Listar trazas
+2. Buscar por Trace ID
+3. Consultar trazas con anomalías
+0. Regresar
+~~~
+
+- **Listar** muestra Trace ID, operación principal, duración, estado y anomalías.
+- **Buscar** acepta el ID en decimal o hexadecimal, por ejemplo `0x1234`.
+- **Anomalías** muestra sólo trazas ya clasificadas al recibir sus spans.
+
+Los registros JSONL dañados se informan y se omiten sin cerrar la aplicación.
+
+## Demoras y alertas
+
+Los pedidos aplican `nanosleep()` dentro del span de Inventory. Una operación es anómala si su span queda en `ERROR` o tarda más de **400 ms**. Un pedido exitoso también puede generar alerta de latencia.
+
+Para una prueba reproducible, sin añadir opciones al menú:
+
+~~~
+TRACELITE_ORDER_DELAY_MS=450 ./service
+~~~
+
+Sin esa variable, la demora es aleatoria entre 10 y 500 ms.
+
+## Configuración
+
+| Variable | Uso | Predeterminado |
+|---|---|---|
+| `TRACELITE_COLLECTOR_SOCKET` | Socket de telemetría. | `/tmp/tracelite/collector.sock` |
+| `TRACELITE_INVENTORY_SOCKET` | Socket de negocio. | `/tmp/tracelite/inventory.sock` |
+| `TRACELITE_INVENTORY_FILE` | Inventario de entrada. | `data/inventory.json` |
+| `TRACELITE_TRACES_FILE` | Historial JSON Lines. | `traces.jsonl` |
+| `TRACELITE_ORDER_DELAY_MS` | Demora de prueba (0 a 60000 ms). | no definida |
+
+Las constantes 10 ms, 500 ms y 400 ms se definen en `service_config.h` y `config.h`.
+
+## Pruebas
+
+~~~
+make test
+~~~
+
+<<<<<<< HEAD
 Resultado esperado:
 
 ```text
@@ -120,49 +186,55 @@ Esperado: ningún proceso y ningún directorio temporal.
 ### Problemas comunes
 
 | Síntoma | Solución |
+=======
+| Objetivo | Comprueba |
+>>>>>>> 727df6f (project completed)
 |---|---|
-| No encuentra `Services/bin/process_manager` | Ejecuta `make` desde la raíz. |
-| Falla al crear o enlazar un socket | Revisa `/tmp/tracelite-*` y ejecuta `make clean`. |
-| `make test-tracing` falla | Ejecuta `make` y repite; revisa la salida que imprime el script. |
-| ORD-003 devuelve `SIMULATED_ERROR` | Es intencional; no es un fallo del programa. |
+| `make test-library` | IDs, contextos, duración, ciclo de vida y Collector ausente. |
+| `make test-collector` | Datagramas válidos/malformados, jerarquía, persistencia y resumen. |
+| `make test-tracing` | Inventario, correlación, alerta de error y latencia. |
+| `make test-resilience` | Collector ausente, cuatro solicitudes normales, JSONL inválido e historial. |
+
+Las pruebas usan directorios temporales y copias del inventario: no alteran `data/inventory.json` ni el historial normal.
 
 ## Arquitectura
 
-```text
+~~~
                     process_manager
-                    /      |       \
-              fork/exec  fork/exec  fork/exec
-                   |         |          |
-               collector  inventory   order
-             (SOCK_DGRAM) (SOCK_STREAM)
-                   ^          ^          |
-                   |          +- petición/respuesta -+
-                   |                                 |
-                   +------ spans de ambos servicios -+
-```
+                    /               \
+             fork/exec             fork/exec
+                  |                     |
+          inventory_service <--- order_service
+                 SOCK_STREAM (negocio)
+                  |                     |
+                  +---- SOCK_DGRAM -----+
+                            spans
+                              |
+                         ./tracelite
+~~~
 
-| Proceso | Responsabilidad |
-|---|---|
-| `process_manager` | Crea el runtime, lanza los hijos con `fork()` + `execl()`, espera y limpia. |
-| `order_service` | Cliente de negocio; crea el span raíz y propaga el contexto. |
-| `inventory_service` | Servidor de negocio; crea el span hijo y simula demora/error. |
-| `collector` | Recibe, valida, agrupa e imprime los spans. |
+- `SOCK_STREAM` transporta solicitudes y respuestas de negocio.
+- `SOCK_DGRAM` transporta spans; un fallo de telemetría no bloquea el negocio.
+- Los datos están separados: `inventory.json` para negocio y `traces.jsonl` para observabilidad.
 
-La comunicación usa sockets Unix con nombre: `SOCK_STREAM` para el negocio y
-`SOCK_DGRAM` para telemetría (un datagrama = un span).
+Para la explicación de procesos, IPC, formato de spans, persistencia y detección de anomalías consulta [la guía técnica](docs/technical-guide.md).
 
-## Escenarios
+## Modo integrado compatible
 
-| Pedido | Producto | Cantidad | Resultado |
-|---|---|---:|---|
-| `ORD-001` | `PRODUCT-001` | 5 | `OK`, stock 20 → 15 |
-| `ORD-002` | `PRODUCT-002` | 3 | `OK`, stock 10 → 7, demora de 150 ms |
-| `ORD-003` | `PRODUCT-003` | 1 | `SIMULATED_ERROR`, stock sin cambios |
+Para el modo legado, donde el Process Manager también lanza el Collector:
 
+<<<<<<< HEAD
+=======
+~~~
+make run-integrated
+~~~
+
+El modo recomendado es usar `./tracelite` y `./service` en terminales independientes.
+
+>>>>>>> 727df6f (project completed)
 ## Limitaciones
 
-- Un único host; no hay comunicación por red.
-- Procesamiento secuencial; la biblioteca no es thread-safe.
-- Sin persistencia: los spans viven en memoria hasta cerrar el Collector.
-- Sin autenticación ni cifrado en los sockets locales.
-- Escenario de negocio fijo de tres pedidos.
+- Un solo host Linux; sin red, autenticación ni cifrado.
+- Procesamiento secuencial y sin concurrencia adicional.
+- Historial limitado a las tres consultas requeridas; sin dashboard, paginación ni filtros avanzados.
+- El umbral se configura al compilar; los spans nuevos guardan su clasificación para no reinterpretar el historial.

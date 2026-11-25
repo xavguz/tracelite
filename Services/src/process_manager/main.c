@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "service_config.h"
 #include "tracelite/tracelite.h"
 
 static volatile sig_atomic_t g_stop_requested = 0;
@@ -98,6 +99,13 @@ static int require_executable(const char *path)
     }
 
     return 0;
+}
+
+static const char *configured_inventory_socket_path(void)
+{
+    const char *path = getenv("TRACELITE_INVENTORY_SOCKET");
+
+    return path != NULL && path[0] != '\0' ? path : TL_INVENTORY_SOCKET_PATH;
 }
 
 static int wait_for_ready(int read_fd)
@@ -229,7 +237,7 @@ static int wait_for_socket(const char *path, pid_t pid)
     return -1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     char executable_dir[PATH_MAX];
     char inventory_path[PATH_MAX];
@@ -246,10 +254,18 @@ int main(void)
     int order_code = -1;
     int collector_code = -1;
     int runtime_created = 0;
+    int integrated_mode = 0;
     int socket_path_length;
     int result = EXIT_FAILURE;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
+
+    if (argc == 2 && strcmp(argv[1], "--integrated") == 0) {
+        integrated_mode = 1;
+    } else if (argc != 1) {
+        fprintf(stderr, "uso: %s [--integrated]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
 
     if (install_signal_handlers() < 0) {
         perror("[process-manager] sigaction");
@@ -279,79 +295,86 @@ int main(void)
 
     if (require_executable(inventory_path) < 0 ||
         require_executable(order_path) < 0 ||
-        require_executable(collector_path) < 0) {
+        (integrated_mode && require_executable(collector_path) < 0)) {
         goto cleanup;
     }
 
-    if (mkdtemp(runtime_dir) == NULL) {
-        perror("[process-manager] mkdtemp");
-        goto cleanup;
+    if (integrated_mode) {
+        if (mkdtemp(runtime_dir) == NULL) {
+            perror("[process-manager] mkdtemp");
+            goto cleanup;
+        }
+        runtime_created = 1;
+        socket_path_length = snprintf(socket_path, sizeof(socket_path),
+                                      "%s/inventory.sock", runtime_dir);
+    } else {
+        socket_path_length = snprintf(socket_path, sizeof(socket_path), "%s",
+                                      configured_inventory_socket_path());
     }
-    runtime_created = 1;
-
-    socket_path_length = snprintf(socket_path, sizeof(socket_path),
-                                  "%s/inventory.sock", runtime_dir);
     if (socket_path_length < 0 ||
         (size_t)socket_path_length >= sizeof(socket_path)) {
         fprintf(stderr, "[process-manager] ruta de socket demasiado larga\n");
         goto cleanup;
     }
 
-    socket_path_length = snprintf(collector_socket_path,
-                                  sizeof(collector_socket_path),
-                                  "%s/collector.sock", runtime_dir);
-    if (socket_path_length < 0 ||
-        (size_t)socket_path_length >= sizeof(collector_socket_path)) {
-        fprintf(stderr, "[process-manager] ruta del collector demasiado "
-                        "larga\n");
-        goto cleanup;
+    if (integrated_mode) {
+        socket_path_length = snprintf(collector_socket_path,
+                                      sizeof(collector_socket_path),
+                                      "%s/collector.sock", runtime_dir);
+        if (socket_path_length < 0 ||
+            (size_t)socket_path_length >= sizeof(collector_socket_path)) {
+            fprintf(stderr, "[process-manager] ruta del collector demasiado larga\n");
+            goto cleanup;
+        }
+        printf("[process-manager] modo integrado; runtime: %s\n", runtime_dir);
+    } else {
+        printf("[process-manager] modo Service independiente\n");
+        printf("[process-manager] collector esperado en %s\n",
+               TL_COLLECTOR_SOCKET_PATH);
     }
-
-    printf("[process-manager] runtime: %s\n", runtime_dir);
     printf("[process-manager] inventario: %s\n", inventory_path);
     printf("[process-manager] pedidos: %s\n", order_path);
-    printf("[process-manager] collector: %s\n", collector_path);
+    if (integrated_mode) {
+        printf("[process-manager] collector: %s\n", collector_path);
+    }
     fflush(stdout);
 
-    if (g_stop_requested) {
+    if (integrated_mode && g_stop_requested) {
         errno = EINTR;
         perror("[process-manager] interrumpido antes de iniciar el collector");
         goto cleanup;
     }
 
-    collector_pid = fork();
-    if (collector_pid < 0) {
-        perror("[process-manager] fork collector");
-        goto cleanup;
-    }
+    if (integrated_mode) {
+        collector_pid = fork();
+        if (collector_pid < 0) {
+            perror("[process-manager] fork collector");
+            goto cleanup;
+        }
 
-    if (collector_pid == 0) {
-        execl(collector_path, "collector", collector_socket_path,
-              (char *)NULL);
-        perror("[process-manager] execl collector");
-        _exit(127);
-    }
+        if (collector_pid == 0) {
+            execl(collector_path, "collector", collector_socket_path,
+                  (char *)NULL);
+            perror("[process-manager] execl collector");
+            _exit(127);
+        }
 
-    if (wait_for_socket(collector_socket_path, collector_pid) < 0) {
-        perror("[process-manager] collector no listo");
-        terminate_child(collector_pid);
-        collector_code = wait_child(collector_pid, "collector");
-        collector_pid = -1;
-        goto cleanup;
-    }
+        if (wait_for_socket(collector_socket_path, collector_pid) < 0) {
+            perror("[process-manager] collector no listo");
+            terminate_child(collector_pid);
+            collector_code = wait_child(collector_pid, "collector");
+            collector_pid = -1;
+            goto cleanup;
+        }
 
-    printf("[process-manager] collector listo (pid=%ld)\n",
-           (long)collector_pid);
-    fflush(stdout);
+        printf("[process-manager] collector listo (pid=%ld)\n",
+               (long)collector_pid);
+        fflush(stdout);
 
-    /*
-     * Los servicios heredan la ruta del Collector. Se usa una variable de
-     * entorno para no alterar la firma ni el orden de los argumentos
-     * existentes de order_service e inventory_service.
-     */
-    if (setenv("TRACELITE_COLLECTOR_SOCKET", collector_socket_path, 1) < 0) {
-        perror("[process-manager] setenv TRACELITE_COLLECTOR_SOCKET");
-        goto cleanup;
+        if (setenv("TRACELITE_COLLECTOR_SOCKET", collector_socket_path, 1) < 0) {
+            perror("[process-manager] setenv TRACELITE_COLLECTOR_SOCKET");
+            goto cleanup;
+        }
     }
 
     if (g_stop_requested) {
@@ -461,7 +484,8 @@ int main(void)
         collector_pid = -1;
     }
 
-    if (order_code == 0 && inventory_code == 0 && collector_code == 0) {
+    if (order_code == 0 && inventory_code == 0 &&
+        (!integrated_mode || collector_code == 0)) {
         printf("[process-manager] ejecucion completada correctamente\n");
         result = EXIT_SUCCESS;
     } else {
@@ -510,6 +534,10 @@ cleanup:
     }
     if (runtime_created && rmdir(runtime_dir) < 0 && errno != ENOENT) {
         perror("[process-manager] rmdir runtime");
+    }
+    if (!runtime_created &&
+        rmdir(TL_RUNTIME_DIR) < 0 && errno != ENOENT && errno != ENOTEMPTY) {
+        perror("[process-manager] rmdir runtime compartido");
     }
 
     return result;

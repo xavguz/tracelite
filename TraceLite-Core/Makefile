@@ -13,7 +13,7 @@ AR ?= ar
 
 CFLAGS   ?= -O2 -g
 override CFLAGS   += -std=c11 -Wall -Wextra -Wpedantic
-override CPPFLAGS += -Iinclude -D_POSIX_C_SOURCE=200809L
+override CPPFLAGS += -Iinclude -I../third_party/cjson -D_POSIX_C_SOURCE=200809L
 
 BUILD_DIR := build
 LIB_DIR   := lib
@@ -32,9 +32,10 @@ LIB_OBJS         := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 COLLECTOR_OBJS   := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(COLLECTOR_SRCS))
 TEST_SENDER_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(TEST_SENDER_SRC))
 TEST_LIB_OBJS    := $(patsubst tests/%.c,$(BUILD_DIR)/tests/%.o,$(TEST_LIB_SRC))
+CJSON_OBJ        := $(BUILD_DIR)/third_party/cjson.o
 
 DEPS := $(LIB_OBJS:.o=.d) $(COLLECTOR_OBJS:.o=.d) \
-        $(TEST_SENDER_OBJS:.o=.d) $(TEST_LIB_OBJS:.o=.d)
+        $(TEST_SENDER_OBJS:.o=.d) $(TEST_LIB_OBJS:.o=.d) $(CJSON_OBJ:.o=.d)
 
 .PHONY: all lib collector test-sender test-collector test-library check \
         clean distclean help
@@ -70,9 +71,9 @@ $(LIB): $(LIB_OBJS)
 endif
 
 ifneq ($(strip $(COLLECTOR_SRCS)),)
-$(COLLECTOR): $(COLLECTOR_OBJS)
+$(COLLECTOR): $(COLLECTOR_OBJS) $(CJSON_OBJ)
 	@mkdir -p $(dir $@)
-	$(CC) $(LDFLAGS) -o $@ $(COLLECTOR_OBJS) $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $(COLLECTOR_OBJS) $(CJSON_OBJ) $(LDLIBS)
 endif
 
 ifneq ($(wildcard $(TEST_SENDER_SRC)),)
@@ -90,6 +91,10 @@ $(BUILD_DIR)/%.o: src/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BUILD_DIR)/tests/%.o: tests/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(CJSON_OBJ): ../third_party/cjson/cJSON.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 

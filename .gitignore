@@ -1,16 +1,7 @@
-# Artefactos de compilacion
-/Services/build/
-/Services/bin/
-/TraceLite-Core/build/
+/service
+/tracelite
 /TraceLite-Core/bin/
+/TraceLite-Core/build/
 /TraceLite-Core/lib/
-*.o
-*.d
-*.a
-
-# Artefactos de ejecucion
-*.sock
-*.log
-
-# Herramientas locales
-compile_commands.json
+/Services/bin/
+/Services/build/

@@ -1,49 +1,39 @@
 #!/bin/sh
-#
-# Prueba end-to-end de la Etapa 3.
-#
-# Ejecuta process_manager, que a su vez lanza el Collector, Inventory Service y
-# Order Service. Comprueba:
-#   - 3 trazas y 6 spans (raiz + hijo por pedido).
-#   - Una traza distinta por pedido.
-#   - Jerarquia correcta: el parent_span_id del hijo es el span_id de su raiz.
-#   - Estados: 4 spans SUCCESS y 2 ERROR (ORD-003).
-#   - Mensaje de error del fallo simulado.
-#   - Cierre ordenado del Collector mediante SHUTDOWN.
-#   - Eliminacion del runtime temporal y del socket.
-#
-# No usa rutas fijas: process_manager crea su propio directorio temporal.
+# Prueba end-to-end: Service y TraceLite independientes, con datos temporales.
 
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(dirname -- "$SCRIPT_DIR")
 PROCESS_MANAGER="$ROOT_DIR/Services/bin/process_manager"
-
-if [ ! -x "$PROCESS_MANAGER" ]; then
-    printf '%s\n' \
-        "test-tracing: falta $PROCESS_MANAGER; ejecute 'make' primero" >&2
-    exit 1
-fi
-
-LOG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tracelite-tracing-XXXXXX")
-LOG="$LOG_DIR/run.log"
-PM_PID=""
+COLLECTOR="$ROOT_DIR/TraceLite-Core/bin/collector"
+RUNTIME_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tracelite-tracing-XXXXXX")
+INVENTORY_FILE="$RUNTIME_DIR/inventory.json"
+INVENTORY_SOCKET="$RUNTIME_DIR/inventory.sock"
+COLLECTOR_SOCKET="$RUNTIME_DIR/collector.sock"
+TRACES_FILE="$RUNTIME_DIR/traces.jsonl"
+SERVICE_LOG="$RUNTIME_DIR/service.log"
+COLLECTOR_LOG="$RUNTIME_DIR/collector.log"
+INPUT_FILE="$RUNTIME_DIR/input.txt"
+SERVICE_PID=""
+COLLECTOR_PID=""
 
 cleanup() {
-    if [ -n "$PM_PID" ] && kill -0 "$PM_PID" 2>/dev/null; then
-        kill -TERM "$PM_PID" 2>/dev/null || true
-        wait "$PM_PID" 2>/dev/null || true
+    if [ -n "$SERVICE_PID" ] && kill -0 "$SERVICE_PID" 2>/dev/null; then
+        kill -TERM "$SERVICE_PID" 2>/dev/null || true
+        wait "$SERVICE_PID" 2>/dev/null || true
     fi
-    rm -rf "$LOG_DIR"
+    if [ -n "$COLLECTOR_PID" ] && kill -0 "$COLLECTOR_PID" 2>/dev/null; then
+        kill -TERM "$COLLECTOR_PID" 2>/dev/null || true
+        wait "$COLLECTOR_PID" 2>/dev/null || true
+    fi
+    rm -rf "$RUNTIME_DIR"
 }
 
 fail() {
     printf 'test-tracing: %s\n' "$1" >&2
-    if [ -f "$LOG" ]; then
-        printf '%s\n' "--- salida de process_manager ---" >&2
-        cat "$LOG" >&2 || true
-    fi
+    [ ! -f "$SERVICE_LOG" ] || { printf '%s\n' '--- Service ---' >&2; cat "$SERVICE_LOG" >&2; }
+    [ ! -f "$COLLECTOR_LOG" ] || { printf '%s\n' '--- TraceLite ---' >&2; cat "$COLLECTOR_LOG" >&2; }
     exit 1
 }
 
@@ -56,158 +46,130 @@ on_exit() {
 trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-trap 'exit 129' HUP
 
-printf '%s\n' "test-tracing: ejecutando process_manager"
+[ -x "$PROCESS_MANAGER" ] || fail "falta $PROCESS_MANAGER; ejecute make primero"
+[ -x "$COLLECTOR" ] || fail "falta $COLLECTOR; ejecute make primero"
+cp "$ROOT_DIR/data/inventory.json" "$INVENTORY_FILE"
 
-"$PROCESS_MANAGER" >"$LOG" 2>&1 &
-PM_PID=$!
+TRACELITE_TRACES_FILE="$TRACES_FILE" \
+    "$COLLECTOR" "$COLLECTOR_SOCKET" >"$COLLECTOR_LOG" 2>&1 &
+COLLECTOR_PID=$!
+
+attempt=0
+while [ ! -S "$COLLECTOR_SOCKET" ]; do
+    kill -0 "$COLLECTOR_PID" 2>/dev/null || fail "TraceLite termino antes de crear su socket"
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 100 ] || fail "timeout esperando el socket de TraceLite"
+    sleep 0.05
+done
+
+cat >"$INPUT_FILE" <<'EOF'
+1
+2
+PRODUCT-002
+3
+PRODUCT-001
+5
+3
+PRODUCT-003
+51
+0
+EOF
+
+TRACELITE_COLLECTOR_SOCKET="$COLLECTOR_SOCKET" \
+TRACELITE_INVENTORY_SOCKET="$INVENTORY_SOCKET" \
+TRACELITE_INVENTORY_FILE="$INVENTORY_FILE" \
+TRACELITE_ORDER_DELAY_MS=450 \
+"$PROCESS_MANAGER" <"$INPUT_FILE" >"$SERVICE_LOG" 2>&1 &
+SERVICE_PID=$!
 
 set +e
-wait "$PM_PID"
-pm_status=$?
+wait "$SERVICE_PID"
+service_status=$?
 set -e
-PM_PID=""
+SERVICE_PID=""
+[ "$service_status" -eq 0 ] || fail "Service termino con codigo $service_status"
 
-if [ "$pm_status" -ne 0 ]; then
-    fail "process_manager termino con codigo $pm_status"
-fi
-
-count_lines() {
-    grep -Fc -- "$1" "$LOG" 2>/dev/null || true
-}
-
-expect_count() {
-    actual=$(count_lines "$1")
-    if [ "$actual" -ne "$2" ]; then
-        fail "se esperaban $2 lineas con '$1', encontradas $actual"
-    fi
-}
+kill -TERM "$COLLECTOR_PID"
+set +e
+wait "$COLLECTOR_PID"
+collector_status=$?
+set -e
+COLLECTOR_PID=""
+[ "$collector_status" -eq 0 ] || fail "TraceLite termino con codigo $collector_status"
 
 require_line() {
-    if ! grep -Fq -- "$1" "$LOG"; then
-        fail "falta en la salida: $1"
-    fi
+    grep -Fq -- "$1" "$2" || fail "falta '$1' en $2"
 }
 
-reject_line() {
-    if grep -Fq -- "$1" "$LOG"; then
-        fail "no se esperaba en la salida: $1"
-    fi
+require_count() {
+    actual=$(grep -Fc -- "$1" "$2" 2>/dev/null || true)
+    [ "$actual" -eq "$3" ] || fail "se esperaban $3 coincidencias de '$1'; hay $actual"
 }
 
-require_line "[process-manager] ejecucion completada correctamente"
-require_line "[collector] SHUTDOWN recibido; cerrando"
-require_line "[collector] spans aceptados=6 rechazados=0"
-require_line "=== TraceLite Collector: 3 traza(s), 6 span(s) ==="
+require_line "[process-manager] modo Service independiente" "$SERVICE_LOG"
+require_line "Resultado: OK — 3 product(s)" "$SERVICE_LOG"
+require_line "Resultado: OK — product found" "$SERVICE_LOG"
+require_line "Resultado: OK — order completed" "$SERVICE_LOG"
+require_line "Resultado: OUT_OF_STOCK — insufficient stock" "$SERVICE_LOG"
+require_line "[inventory] demora de 450 ms para pedido" "$SERVICE_LOG"
+require_line "[process-manager] ejecucion completada correctamente" "$SERVICE_LOG"
+grep -Fq '95' "$INVENTORY_FILE" || fail "el pedido no persistio stock=95"
 
-expect_count "[raiz] depth=0" 3
-expect_count "[hijo] depth=1" 3
-expect_count "spans=2" 3
-expect_count "[collector] span aceptado" 6
-expect_count "service=order-service operation=process-order" 3
-expect_count "service=inventory-service operation=reserve-stock" 3
-expect_count "status=SUCCESS" 4
-expect_count "status=ERROR" 2
-expect_count 'error="simulated inventory failure for ORD-003"' 2
-expect_count "[inventory] demora simulada" 1
-
-reject_line "[huerfano]"
-reject_line "status=UNSET"
-
-# ORD-002 debe provocar una demora real y la duracion de al menos un span debe
-# reflejarla. Se toma el valor declarado por Inventory y se compara con la
-# mayor duracion impresa por el Collector.
-delay_ms=$(sed -n \
-    's/.*demora simulada de \([0-9][0-9]*\) ms para ORD-002.*/\1/p' \
-    "$LOG" | head -n 1)
-if [ -z "$delay_ms" ]; then
-    fail "no se encontro la demora simulada de ORD-002"
-fi
-if [ "$delay_ms" -lt 100 ]; then
-    fail "la demora de ORD-002 es demasiado pequena: ${delay_ms} ms"
-fi
+require_line "=== TraceLite Collector: 4 traza(s), 8 span(s) ===" "$COLLECTOR_LOG"
+require_count "[collector] span aceptado" "$COLLECTOR_LOG" 8
+require_count "[raiz] depth=0" "$COLLECTOR_LOG" 4
+require_count "[hijo] depth=1" "$COLLECTOR_LOG" 4
+require_count "status=SUCCESS" "$COLLECTOR_LOG" 6
+require_count "status=ERROR" "$COLLECTOR_LOG" 2
+require_line "operation=list-products-request" "$COLLECTOR_LOG"
+require_line "operation=list-products" "$COLLECTOR_LOG"
+require_line "operation=find-product-request" "$COLLECTOR_LOG"
+require_line "operation=find-product" "$COLLECTOR_LOG"
+require_line "operation=process-order" "$COLLECTOR_LOG"
+require_line "operation=reserve-stock" "$COLLECTOR_LOG"
+[ "$(wc -l <"$TRACES_FILE")" -eq 8 ] ||
+    fail "se esperaban 8 spans persistidos"
+require_count "[ALERT] Latency anomaly detected" "$COLLECTOR_LOG" 1
+require_count "[ALERT] Error anomaly detected" "$COLLECTOR_LOG" 1
+require_line '"anomaly_flags":2' "$TRACES_FILE"
+require_line '"anomaly_flags":1' "$TRACES_FILE"
+require_line "Total requests:       4" "$COLLECTOR_LOG"
+require_line "Spans received:       8" "$COLLECTOR_LOG"
+require_line "Spans persisted:      8" "$COLLECTOR_LOG"
+require_line "Anomalous requests:   2" "$COLLECTOR_LOG"
+require_line "Total alerts:         2" "$COLLECTOR_LOG"
 
 max_duration_ms=$(awk '
 /duration_ms=/ {
     for (i = 1; i <= NF; i++) {
         if ($i ~ /^duration_ms=/) {
-            split($i, parts, "=")
-            value = parts[2] + 0
-            if (value > max) {
-                max = value
-            }
+            split($i, value, "=")
+            if (value[2] + 0 > maximum) maximum = value[2] + 0
         }
     }
 }
-END { printf "%.3f", max }
-' "$LOG")
+END { print maximum + 0 }
+' "$COLLECTOR_LOG")
+awk -v duration="$max_duration_ms" 'BEGIN { exit !(duration >= 440) }' ||
+    fail "la demora controlada no quedo incluida en un span (${max_duration_ms} ms)"
 
-if ! awk -v max="$max_duration_ms" -v delay="$delay_ms" \
-    'BEGIN { exit !(max >= delay - 10) }'; then
-    fail "la duracion maxima (${max_duration_ms} ms) no refleja la demora de ORD-002 (${delay_ms} ms)"
-fi
-
-# El padre del hijo debe coincidir con el span raiz de la misma traza. Tambien
-# se comprueba que las tres raices pertenecen a trazas distintas.
+# Para cada hijo, su Trace ID y Parent Span ID deben coincidir con su raiz.
 if ! awk '
-/^Traza [0-9]+\/3: trace_id=0x/ {
-    headers++
-    next
-}
 /\[raiz\] depth=0/ {
-    if (!match($0, /trace_id=0x[0-9a-f]+/)) {
-        bad = 1
-        next
-    }
-    tid = substr($0, RSTART + 9, RLENGTH - 9)
-    if (!match($0, /span_id=0x[0-9a-f]+/)) {
-        bad = 1
-        next
-    }
-    sid = substr($0, RSTART + 8, RLENGTH - 8)
-    if (tid in root_span_id) {
-        duplicate = 1
-    }
-    root_span_id[tid] = sid
-    roots++
+    match($0, /trace_id=0x[0-9a-f]+/); trace = substr($0, RSTART + 9, RLENGTH - 9)
+    match($0, /span_id=0x[0-9a-f]+/); root[trace] = substr($0, RSTART + 8, RLENGTH - 8)
     next
 }
 /\[hijo\] depth=1/ {
-    if (!match($0, /trace_id=0x[0-9a-f]+/)) {
-        bad = 1
-        next
-    }
-    tid = substr($0, RSTART + 9, RLENGTH - 9)
-    if (!match($0, /parent_span_id=0x[0-9a-f]+/)) {
-        bad = 1
-        next
-    }
-    pid = substr($0, RSTART + 15, RLENGTH - 15)
-    if (!(tid in root_span_id) || root_span_id[tid] != pid) {
-        bad = 1
-    }
+    match($0, /trace_id=0x[0-9a-f]+/); trace = substr($0, RSTART + 9, RLENGTH - 9)
+    match($0, /parent_span_id=0x[0-9a-f]+/); parent = substr($0, RSTART + 15, RLENGTH - 15)
+    if (!(trace in root) || root[trace] != parent) bad = 1
     children++
-    next
 }
-END {
-    if (headers != 3 || roots != 3 || children != 3 || duplicate || bad) {
-        exit 1
-    }
-}
-' "$LOG"; then
-    fail "la jerarquia de spans no es coherente"
+END { exit bad || children != 4 }
+' "$COLLECTOR_LOG"; then
+    fail "la correlacion padre-hijo no es coherente"
 fi
 
-RUNTIME_DIR=$(sed -n 's/^\[process-manager\] runtime: //p' "$LOG" | head -n 1)
-if [ -z "$RUNTIME_DIR" ]; then
-    fail "no se pudo determinar el runtime temporal"
-fi
-if [ -e "$RUNTIME_DIR" ]; then
-    fail "el runtime temporal no fue eliminado: $RUNTIME_DIR"
-fi
-
-printf '%s\n' "test-tracing: jerarquia OK (3 raices, 3 hijos)"
-printf '%s\n' \
-    "test-tracing: demora ORD-002 OK (${delay_ms} ms; duracion max ${max_duration_ms} ms)"
-printf '%s\n' "test-tracing: OK"
+printf '%s\n' 'test-tracing: Service independiente, inventario y correlacion OK'

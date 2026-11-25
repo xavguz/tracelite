@@ -13,4 +13,8 @@
 /* Tamano maximo de un datagrama completo, cabecera incluida. */
 #define TL_COLLECTOR_MAX_DATAGRAM 512u
 
+#ifndef TL_LATENCY_ANOMALY_THRESHOLD_MS
+#define TL_LATENCY_ANOMALY_THRESHOLD_MS 400u
+#endif
+
 #endif /* TRACELITE_CONFIG_H */

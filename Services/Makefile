@@ -16,7 +16,7 @@ CC ?= cc
 
 CFLAGS   ?= -O2 -g
 override CFLAGS   += -std=c11 -Wall -Wextra -Wpedantic
-override CPPFLAGS += -Iinclude -I../TraceLite-Core/include -D_POSIX_C_SOURCE=200809L
+override CPPFLAGS += -Iinclude -I../TraceLite-Core/include -I../third_party/cjson -D_POSIX_C_SOURCE=200809L
 
 BUILD_DIR := build
 BIN_DIR   := bin
@@ -33,15 +33,16 @@ PROGRAM_BINS := $(addprefix $(BIN_DIR)/,$(PROGRAMS))
 
 COMMON_SRCS := $(wildcard src/common/*.c)
 COMMON_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(COMMON_SRCS))
+CJSON_OBJ := $(BUILD_DIR)/third_party/cjson.o
 
 process_manager_OBJS   := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(wildcard src/process_manager/*.c))
 order_service_OBJS     := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(wildcard src/order_service/*.c))
 inventory_service_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(wildcard src/inventory_service/*.c))
 
 SERVICE_OBJS := $(process_manager_OBJS) $(order_service_OBJS) $(inventory_service_OBJS)
-DEPS         := $(COMMON_OBJS:.o=.d) $(SERVICE_OBJS:.o=.d)
+DEPS         := $(COMMON_OBJS:.o=.d) $(SERVICE_OBJS:.o=.d) $(CJSON_OBJ:.o=.d)
 
-.PHONY: all run check clean distclean help
+.PHONY: all run run-integrated check clean distclean help
 
 ifeq ($(strip $(SERVICE_OBJS)),)
 all:
@@ -53,19 +54,26 @@ endif
 run: all
 	./bin/process_manager
 
-$(BIN_DIR)/process_manager: $(process_manager_OBJS) $(COMMON_OBJS) $(CORE_LINK) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(process_manager_OBJS) $(COMMON_OBJS) $(CORE_LINK) $(LDLIBS)
+run-integrated: all
+	./bin/process_manager --integrated
 
-$(BIN_DIR)/order_service: $(order_service_OBJS) $(COMMON_OBJS) $(CORE_LINK) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(order_service_OBJS) $(COMMON_OBJS) $(CORE_LINK) $(LDLIBS)
+$(BIN_DIR)/process_manager: $(process_manager_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) | $(BIN_DIR)
+	$(CC) $(LDFLAGS) -o $@ $(process_manager_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) $(LDLIBS)
 
-$(BIN_DIR)/inventory_service: $(inventory_service_OBJS) $(COMMON_OBJS) $(CORE_LINK) | $(BIN_DIR)
-	$(CC) $(LDFLAGS) -o $@ $(inventory_service_OBJS) $(COMMON_OBJS) $(CORE_LINK) $(LDLIBS)
+$(BIN_DIR)/order_service: $(order_service_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) | $(BIN_DIR)
+	$(CC) $(LDFLAGS) -o $@ $(order_service_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) $(LDLIBS)
+
+$(BIN_DIR)/inventory_service: $(inventory_service_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) | $(BIN_DIR)
+	$(CC) $(LDFLAGS) -o $@ $(inventory_service_OBJS) $(COMMON_OBJS) $(CJSON_OBJ) $(CORE_LINK) $(LDLIBS)
 
 $(CORE_LIB):
 	$(MAKE) -C $(CORE_DIR) lib
 
 $(BUILD_DIR)/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(CJSON_OBJ): ../third_party/cjson/cJSON.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -90,7 +98,8 @@ distclean: clean
 help:
 	@echo "Services - objetivos disponibles"
 	@echo "  make              Construye los tres ejecutables"
-	@echo "  make run          Ejecuta process_manager"
+	@echo "  make run          Ejecuta process_manager independiente"
+	@echo "  make run-integrated  Ejecuta el modo legado con Collector hijo"
 	@echo "  make check        Valida los encabezados de Services"
 	@echo "  make clean        Elimina build/ y bin/"
 	@echo "  make distclean    Equivalente a clean"

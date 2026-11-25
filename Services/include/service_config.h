@@ -9,17 +9,19 @@
  */
 
 #define TL_INVENTORY_SOCKET_PATH TL_RUNTIME_DIR "/inventory.sock"
+#define TL_INVENTORY_FILE "data/inventory.json"
 
-/*
- * Escenario de prueba: Order Service envia exactamente tres pedidos y
- * Inventory Service termina cuando ha procesado los tres.
- */
-#define TL_TEST_ORDER_COUNT 3u
+/* Parametros iniciales de latencia; se pueden sustituir al compilar. */
+#ifndef TL_ORDER_DELAY_MIN_MS
+#define TL_ORDER_DELAY_MIN_MS 10u
+#endif
 
-/*
- * ORD-002 simula una operacion lenta. La espera se realiza dentro del span de
- * Inventory para que la duracion registrada refleje la demora.
- */
-#define TL_ORD002_DELAY_MS 150u
+#ifndef TL_ORDER_DELAY_MAX_MS
+#define TL_ORDER_DELAY_MAX_MS 500u
+#endif
+
+#ifndef TL_LATENCY_ANOMALY_THRESHOLD_MS
+#define TL_LATENCY_ANOMALY_THRESHOLD_MS 400u
+#endif
 
 #endif /* TRACELITE_SERVICE_CONFIG_H */

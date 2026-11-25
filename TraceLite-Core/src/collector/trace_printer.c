@@ -121,6 +121,35 @@ static void print_flat(FILE *stream, const tl_trace_group_t *group)
     }
 }
 
+int tl_trace_printer_print_group(const tl_trace_group_t *group, FILE *stream)
+{
+    unsigned char *visited;
+    size_t span_index;
+
+    if (group == NULL || stream == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    visited = calloc(group->span_count, sizeof(*visited));
+    if (visited == NULL) {
+        print_flat(stream, group);
+        return -1;
+    }
+    for (span_index = 0; span_index < group->span_count; span_index++) {
+        if (group->spans[span_index].parent_span_id == TL_INVALID_SPAN_ID) {
+            print_subtree(stream, group, span_index, 0u, "raiz", visited);
+        }
+    }
+    for (span_index = 0; span_index < group->span_count; span_index++) {
+        if (visited[span_index] == 0u) {
+            print_subtree(stream, group, span_index, 0u, "huerfano", visited);
+        }
+    }
+    free(visited);
+    return ferror(stream) ? -1 : 0;
+}
+
 int tl_trace_printer_print(const tl_span_storage_t *storage, FILE *stream)
 {
     size_t trace_index;

@@ -15,5 +15,6 @@
  * Devuelve 0 en exito o -1 si hubo un error de escritura o de memoria.
  */
 int tl_trace_printer_print(const tl_span_storage_t *storage, FILE *stream);
+int tl_trace_printer_print_group(const tl_trace_group_t *group, FILE *stream);
 
 #endif /* TRACELITE_TRACE_PRINTER_H */

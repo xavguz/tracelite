@@ -41,7 +41,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-"$BIN_DIR/collector" "$SOCKET_PATH" >"$COLLECTOR_LOG" 2>&1 &
+TRACELITE_TRACES_FILE="$RUNTIME_DIR/traces.jsonl" \
+    "$BIN_DIR/collector" "$SOCKET_PATH" >"$COLLECTOR_LOG" 2>&1 &
 COLLECTOR_PID=$!
 
 attempt=0
@@ -99,5 +100,15 @@ require_log_line "status=SUCCESS"
 require_log_line "status=ERROR"
 require_log_line "duration_ms=12.500"
 require_log_line "duration_ms=4.500"
+require_log_line "Total requests:       2"
+require_log_line "Spans received:       4"
+require_log_line "Spans persisted:      4"
+require_log_line "Anomalous requests:   1"
+require_log_line "Total alerts:         1"
+
+if [ "$(wc -l <"$RUNTIME_DIR/traces.jsonl")" -ne 4 ]; then
+    printf '%s\n' "test-collector: persistencia incompleta" >&2
+    exit 1
+fi
 
 printf '%s\n' "test-collector: OK"

@@ -1,0 +1,13 @@
+[{
+		"id":	"PRODUCT-001",
+		"name":	"Teclado",
+		"stock":	90
+	}, {
+		"id":	"PRODUCT-002",
+		"name":	"Mouse",
+		"stock":	100
+	}, {
+		"id":	"PRODUCT-003",
+		"name":	"Monitor",
+		"stock":	50
+	}]
