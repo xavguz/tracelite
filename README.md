@@ -126,7 +126,6 @@ Las constantes 10 ms, 500 ms y 400 ms se definen en `service_config.h` y `config
 make test
 ~~~
 
-<<<<<<< HEAD
 Resultado esperado:
 
 ```text
@@ -186,9 +185,7 @@ Esperado: ningún proceso y ningún directorio temporal.
 ### Problemas comunes
 
 | Síntoma | Solución |
-=======
 | Objetivo | Comprueba |
->>>>>>> 727df6f (project completed)
 |---|---|
 | `make test-library` | IDs, contextos, duración, ciclo de vida y Collector ausente. |
 | `make test-collector` | Datagramas válidos/malformados, jerarquía, persistencia y resumen. |
@@ -223,15 +220,11 @@ Para la explicación de procesos, IPC, formato de spans, persistencia y detecci�
 
 Para el modo legado, donde el Process Manager también lanza el Collector:
 
-<<<<<<< HEAD
-=======
 ~~~
 make run-integrated
 ~~~
 
 El modo recomendado es usar `./tracelite` y `./service` en terminales independientes.
-
->>>>>>> 727df6f (project completed)
 ## Limitaciones
 
 - Un solo host Linux; sin red, autenticación ni cifrado.
