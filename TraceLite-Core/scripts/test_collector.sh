@@ -83,7 +83,7 @@ if [ -e "$SOCKET_PATH" ]; then
 fi
 
 require_log_line() {
-    if ! grep -Fq "$1" "$COLLECTOR_LOG"; then
+    if ! grep -Fq -- "$1" "$COLLECTOR_LOG"; then
         printf 'test-collector: falta en la salida: %s\n' "$1" >&2
         exit 1
     fi
@@ -92,14 +92,13 @@ require_log_line() {
 require_log_line "[collector] SHUTDOWN recibido; cerrando"
 require_log_line "[collector] spans aceptados=4 rechazados=8"
 require_log_line "=== TraceLite Collector: 2 traza(s), 4 span(s) ==="
-require_log_line "Traza 1/2: trace_id=0x1111111111111111 spans=2"
-require_log_line "Traza 2/2: trace_id=0x2222222222222222 spans=2"
-require_log_line "[raiz] depth=0 trace_id=0x1111111111111111 span_id=0x1000000000000001"
-require_log_line "[hijo] depth=1 trace_id=0x1111111111111111 span_id=0x1000000000000002 parent_span_id=0x1000000000000001"
-require_log_line "status=SUCCESS"
-require_log_line "status=ERROR"
-require_log_line "duration_ms=12.500"
-require_log_line "duration_ms=4.500"
+require_log_line "---------- Traza 1/2 ----------"
+require_log_line "ID:    0x1111111111111111"
+require_log_line "ID:    0x2222222222222222"
+require_log_line "Jerarquia:"
+require_log_line '`-- process-order  [SUCCESS]  order-service  12.500 ms  (raiz)'
+require_log_line '|-- reserve-stock  [ERROR]  inventory-service  4.500 ms'
+require_log_line "span_id: 0x1000000000000002 | parent: 0x1000000000000001"
 require_log_line "Total requests:       2"
 require_log_line "Spans received:       4"
 require_log_line "Spans persisted:      4"

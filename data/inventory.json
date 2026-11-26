@@ -1,13 +1,33 @@
 [{
 		"id":	"PRODUCT-001",
 		"name":	"Teclado",
-		"stock":	90
+		"stock":	40
 	}, {
 		"id":	"PRODUCT-002",
 		"name":	"Mouse",
-		"stock":	100
+		"stock":	90
 	}, {
 		"id":	"PRODUCT-003",
 		"name":	"Monitor",
 		"stock":	50
+	}, {
+		"id":	"PRODUCT-004",
+		"name":	"Portatil",
+		"stock":	25
+	}, {
+		"id":	"PRODUCT-005",
+		"name":	"Webcam",
+		"stock":	60
+	}, {
+		"id":	"PRODUCT-006",
+		"name":	"Audifonos",
+		"stock":	75
+	}, {
+		"id":	"PRODUCT-007",
+		"name":	"Disco SSD 1TB",
+		"stock":	40
+	}, {
+		"id":	"PRODUCT-008",
+		"name":	"Hub USB-C",
+		"stock":	0
 	}]

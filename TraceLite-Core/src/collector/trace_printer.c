@@ -41,7 +41,7 @@ static int compute_end_ns(const tl_span_t *span, int64_t *end_ns)
 }
 
 static void print_span(FILE *stream, const tl_span_t *span, unsigned depth,
-                       const char *role)
+                       const char *branch, const char *kind)
 {
     char duration[64];
     int64_t end_ns = 0;
@@ -51,41 +51,42 @@ static void print_span(FILE *stream, const tl_span_t *span, unsigned depth,
 
     format_duration_ms(span->duration_ns, duration, sizeof(duration));
 
-    fprintf(stream,
-            "%*s[%s] depth=%u trace_id=0x%016" PRIx64
-            " span_id=0x%016" PRIx64 " parent_span_id=",
-            indentation, "", role, depth, span->trace_id, span->span_id);
+    fprintf(stream, "%*s%s %.*s  [%s]  %.*s  %s ms",
+            indentation, "", branch,
+            (int)(TL_OPERATION_NAME_MAX - 1u), span->operation_name,
+            tl_span_status_name(span->status),
+            (int)(TL_SERVICE_NAME_MAX - 1u), span->service_name, duration);
+    if (kind != NULL) {
+        fprintf(stream, "  (%s)", kind);
+    }
+    fputc('\n', stream);
 
+    fprintf(stream, "%*s    span_id: 0x%016" PRIx64 " | parent: ",
+            indentation, "", span->span_id);
     if (span->parent_span_id == TL_INVALID_SPAN_ID) {
-        fputs("none", stream);
+        fputs("none\n", stream);
     } else {
-        fprintf(stream, "0x%016" PRIx64, span->parent_span_id);
+        fprintf(stream, "0x%016" PRIx64 "\n", span->parent_span_id);
     }
 
-    fprintf(stream,
-            "\n%*s  service=%.*s operation=%.*s status=%s\n",
-            indentation, "", (int)(TL_SERVICE_NAME_MAX - 1u),
-            span->service_name, (int)(TL_OPERATION_NAME_MAX - 1u),
-            span->operation_name, tl_span_status_name(span->status));
-
     if (compute_end_ns(span, &end_ns) == 0) {
-        fprintf(stream, "%*s  start_ns=%" PRId64 " end_ns=%" PRId64
-                        " duration_ms=%s\n",
-                indentation, "", span->start_monotonic_ns, end_ns, duration);
+        fprintf(stream, "%*s    start_ns: %" PRId64 " | end_ns: %" PRId64
+                        "\n",
+                indentation, "", span->start_monotonic_ns, end_ns);
     } else {
-        fprintf(stream, "%*s  start_ns=%" PRId64
-                        " end_ns=overflow duration_ms=%s\n",
-                indentation, "", span->start_monotonic_ns, duration);
+        fprintf(stream, "%*s    start_ns: %" PRId64
+                        " | end_ns: overflow\n",
+                indentation, "", span->start_monotonic_ns);
     }
 
     if (span->error_message[0] != '\0') {
-        fprintf(stream, "%*s  error=\"%.*s\"\n", indentation, "",
+        fprintf(stream, "%*s    error: \"%.*s\"\n", indentation, "",
                 (int)(TL_ERROR_MESSAGE_MAX - 1u), span->error_message);
     }
 }
 
 static void print_subtree(FILE *stream, const tl_trace_group_t *group,
-                          size_t index, unsigned depth, const char *role,
+                          size_t index, unsigned depth, const char *kind,
                           unsigned char *visited)
 {
     const tl_span_t *span;
@@ -97,7 +98,7 @@ static void print_subtree(FILE *stream, const tl_trace_group_t *group,
 
     visited[index] = 1u;
     span = &group->spans[index];
-    print_span(stream, span, depth, role);
+    print_span(stream, span, depth, depth == 0u ? "`--" : "|--", kind);
 
     if (depth >= TL_PRINTER_MAX_DEPTH) {
         return;
@@ -106,7 +107,7 @@ static void print_subtree(FILE *stream, const tl_trace_group_t *group,
     for (child_index = 0; child_index < group->span_count; child_index++) {
         if (visited[child_index] == 0u &&
             group->spans[child_index].parent_span_id == span->span_id) {
-            print_subtree(stream, group, child_index, depth + 1u, "hijo",
+            print_subtree(stream, group, child_index, depth + 1u, NULL,
                           visited);
         }
     }
@@ -117,7 +118,7 @@ static void print_flat(FILE *stream, const tl_trace_group_t *group)
     size_t index;
 
     for (index = 0; index < group->span_count; index++) {
-        print_span(stream, &group->spans[index], 0u, "span");
+        print_span(stream, &group->spans[index], 0u, "`--", "sin jerarquia");
     }
 }
 
@@ -136,6 +137,9 @@ int tl_trace_printer_print_group(const tl_trace_group_t *group, FILE *stream)
         print_flat(stream, group);
         return -1;
     }
+    fprintf(stream, "Traza: 0x%016" PRIx64 " | spans: %zu\n",
+            group->trace_id, group->span_count);
+    fputs("Jerarquia:\n", stream);
     for (span_index = 0; span_index < group->span_count; span_index++) {
         if (group->spans[span_index].parent_span_id == TL_INVALID_SPAN_ID) {
             print_subtree(stream, group, span_index, 0u, "raiz", visited);
@@ -169,8 +173,10 @@ int tl_trace_printer_print(const tl_span_storage_t *storage, FILE *stream)
         unsigned char *visited;
         size_t span_index;
 
-        fprintf(stream, "\nTraza %zu/%zu: trace_id=0x%016" PRIx64
-                        " spans=%zu\n",
+        fprintf(stream, "\n---------- Traza %zu/%zu ----------\n"
+                        "ID:    0x%016" PRIx64 "\n"
+                        "Spans: %zu\n"
+                        "Jerarquia:\n",
                 trace_index + 1u, storage->group_count, group->trace_id,
                 group->span_count);
 
